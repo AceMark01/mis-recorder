@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>MIS Audio Recorder</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{
+  height:100%;
+  font-family:system-ui,-apple-system,sans-serif;
+  background:#080f20;color:#e2e8f0;
+  display:flex;align-items:center;justify-content:center;padding:16px;
+}
+.card{width:100%;max-width:360px;background:#111827;border-radius:20px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.7);}
+.stripe{height:4px;background:linear-gradient(90deg,#c084fc,#f87171,#fbbf24);}
+.body{padding:24px 20px 18px;text-align:center;}
+.title{font-size:11px;letter-spacing:1.4px;text-transform:uppercase;color:#64748b;margin-bottom:20px;font-family:monospace;}
+
+/* IDLE */
+#sIdle{display:block;}#sRec,#sDone{display:none;}
+.start-btn{width:100%;padding:16px;border-radius:14px;cursor:pointer;font-size:15px;font-weight:700;border:2px solid rgba(192,132,252,.5);background:rgba(192,132,252,.1);color:#c084fc;transition:all .2s;}
+.start-btn:hover{background:rgba(192,132,252,.22);transform:translateY(-1px);}
+
+/* RECORDING */
+.dot{width:14px;height:14px;border-radius:50%;background:#f87171;margin:0 auto 14px;animation:pulse .7s ease-in-out infinite;}
+@keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.5);opacity:.4}}
+.timer{font-size:44px;font-weight:800;color:#f87171;letter-spacing:4px;font-family:monospace;margin-bottom:18px;}
+.stop-btn{width:100%;padding:15px;border-radius:14px;cursor:pointer;font-size:14px;font-weight:700;border:2px solid rgba(251,191,36,.5);background:rgba(251,191,36,.1);color:#fbbf24;transition:all .2s;}
+.stop-btn:hover{background:rgba(251,191,36,.22);}
+
+/* DONE */
+.badge{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:#4ade80;font-weight:600;padding:5px 14px;border-radius:20px;background:rgba(74,222,128,.1);border:1px solid rgba(74,222,128,.28);margin-bottom:14px;font-family:monospace;}
+.bdot{width:8px;height:8px;border-radius:50%;background:#4ade80;box-shadow:0 0 6px #4ade80;}
+audio{width:100%;height:40px;border-radius:8px;outline:none;margin-bottom:14px;display:block;}
+.use-btn{width:100%;padding:15px;border-radius:14px;cursor:pointer;font-size:14px;font-weight:700;border:none;background:linear-gradient(135deg,#2563eb,#0891b2);color:#fff;box-shadow:0 4px 16px rgba(37,99,235,.4);transition:all .2s;margin-bottom:10px;display:block;}
+.use-btn:hover{transform:translateY(-1px);box-shadow:0 6px 22px rgba(37,99,235,.55);}
+.rr-btn{width:100%;padding:13px;border-radius:14px;cursor:pointer;font-size:13px;font-weight:600;display:block;border:1.5px solid rgba(251,191,36,.4);background:rgba(251,191,36,.07);color:#fbbf24;transition:all .2s;}
+.rr-btn:hover{background:rgba(251,191,36,.18);}
+
+.footer{padding:0 20px 18px;display:flex;justify-content:flex-end;}
+.cancel-btn{padding:8px 18px;border-radius:8px;cursor:pointer;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);color:#64748b;font-size:12px;transition:all .2s;}
+.cancel-btn:hover{color:#e2e8f0;}
+
+.sending{display:none;position:fixed;inset:0;background:rgba(8,15,32,.9);align-items:center;justify-content:center;flex-direction:column;gap:14px;font-family:monospace;font-size:13px;color:#94a3b8;}
+.sending.on{display:flex;}
+.spin{width:36px;height:36px;border-radius:50%;border:3px solid rgba(96,165,250,.15);border-top-color:#60a5fa;animation:sp .7s linear infinite;}
+@keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="stripe"></div>
+  <div class="body">
+    <div class="title">🎙 MIS Audio Recorder</div>
+    <div id="sIdle">
+      <button class="start-btn" onclick="beginRec()">🔴 &nbsp; Start Recording</button>
+    </div>
+    <div id="sRec">
+      <div class="dot"></div>
+      <div class="timer" id="timerEl">00:00</div>
+      <button class="stop-btn" onclick="stopRec()">⏹ &nbsp; Stop Recording</button>
+    </div>
+    <div id="sDone">
+      <div class="badge"><span class="bdot"></span>Recording Ready</div>
+      <audio id="preview" controls></audio>
+      <button class="use-btn" onclick="useRec()">✅ &nbsp; Use This Recording</button>
+      <button class="rr-btn" onclick="reRec()">🔄 &nbsp; Re-record</button>
+    </div>
+  </div>
+  <div class="footer">
+    <button class="cancel-btn" onclick="cancelRec()">✕ Cancel</button>
+  </div>
+</div>
+<div class="sending" id="sending">
+  <div class="spin"></div>
+  <span>Sending to main window…</span>
+</div>
+
+<script>
+var mr=null,stream=null,chunks=[],blob=null,timer=null,sec=0,tid=null;
+
+// Get tid from opener
+try{if(window.opener)tid=window.opener._recTid;}catch(e){}
+
+// Also try URL param as fallback
+var urlTid=new URLSearchParams(window.location.search).get('tid');
+if(urlTid)tid=parseInt(urlTid)||urlTid;
+
+function show(id){
+  ['sIdle','sRec','sDone'].forEach(function(s){
+    document.getElementById(s).style.display=(s===id)?'block':'none';
+  });
+}
+
+async function beginRec(){
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+    var mime='';
+    if(MediaRecorder.isTypeSupported('audio/webm;codecs=opus'))mime='audio/webm;codecs=opus';
+    else if(MediaRecorder.isTypeSupported('audio/webm'))mime='audio/webm';
+    else if(MediaRecorder.isTypeSupported('audio/mp4'))mime='audio/mp4';
+    mr=new MediaRecorder(stream,mime?{mimeType:mime}:{});
+    chunks=[];
+    mr.ondataavailable=function(e){if(e.data&&e.data.size>0)chunks.push(e.data);};
+    mr.onstop=function(){
+      stream.getTracks().forEach(function(t){t.stop();});
+      var usedMime=mr.mimeType||mime||'audio/webm';
+      blob=new Blob(chunks,{type:usedMime});
+      document.getElementById('preview').src=URL.createObjectURL(blob);
+      show('sDone');
+    };
+    mr.start(200);
+    sec=0;
+    document.getElementById('timerEl').textContent='00:00';
+    timer=setInterval(function(){
+      sec++;
+      var m=String(Math.floor(sec/60)).padStart(2,'0');
+      var s=String(sec%60).padStart(2,'0');
+      document.getElementById('timerEl').textContent=m+':'+s;
+    },1000);
+    show('sRec');
+  }catch(err){
+    alert('Mic Error: '+(err.message||err.name));
+  }
+}
+
+function stopRec(){
+  clearInterval(timer);timer=null;
+  if(mr&&mr.state!=='inactive')mr.stop();
+  mr=null;
+}
+
+function reRec(){
+  clearInterval(timer);timer=null;
+  if(mr&&mr.state!=='inactive'){try{mr.stop();}catch(e){}}
+  if(stream)stream.getTracks().forEach(function(t){t.stop();});
+  mr=null;stream=null;chunks=[];blob=null;sec=0;
+  var p=document.getElementById('preview');p.pause();p.src='';
+  document.getElementById('timerEl').textContent='00:00';
+  show('sIdle');
+}
+
+function useRec(){
+  if(!blob){alert('Koi recording nahi hai');return;}
+  document.getElementById('sending').classList.add('on');
+  var reader=new FileReader();
+  reader.onloadend=function(){
+    var b64=reader.result.split(',')[1]||'';
+    var payload={type:'GAS_REC_DONE',tid:tid,b64:b64,mime:blob.type||'audio/webm',sec:sec};
+    var sent=false;
+    // Try postMessage to opener
+    try{
+      if(window.opener&&!window.opener.closed){
+        window.opener.postMessage(payload,'*');
+        sent=true;
+      }
+    }catch(e){}
+    if(sent){window.close();}
+    else{
+      // Opener not available — show manual close message
+      document.getElementById('sending').innerHTML='<div style="color:#4ade80;font-size:14px;text-align:center;padding:20px;">✅ Recording sent!<br><small style="color:#64748b;margin-top:8px;display:block;">Yeh window band karo</small></div>';
+    }
+  };
+  reader.readAsDataURL(blob);
+}
+
+function cancelRec(){
+  clearInterval(timer);
+  if(mr&&mr.state!=='inactive'){try{mr.stop();}catch(e){}}
+  if(stream)stream.getTracks().forEach(function(t){t.stop();});
+  try{
+    if(window.opener&&!window.opener.closed){
+      window.opener.postMessage({type:'GAS_REC_CANCEL',tid:tid},'*');
+    }
+  }catch(e){}
+  window.close();
+}
+
+window.addEventListener('beforeunload',function(){
+  clearInterval(timer);
+  if(stream)stream.getTracks().forEach(function(t){t.stop();});
+});
+</script>
+</body>
+</html>
